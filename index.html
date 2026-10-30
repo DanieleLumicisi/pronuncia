@@ -22,9 +22,9 @@
 (()=>{'use strict';
 const $=id=>document.getElementById(id);
 const els={model:$('audio-model'),me:$('audio-me')};
-let data={model:null,me:null};let urls={model:null,me:null};let recording=null;let playing=false;let loop=false;let currentSavedId=null;let db=null;let token=0;
+let data={model:null,me:null};let urls={model:null,me:null};let recording=null;let playing=false;let loop=false;let currentSavedId=null;let db=null;let token=0;let ctx=null;let activeSource=null;
 const status=(id,msg,rec=false)=>{const el=$(id+'-status');el.textContent=msg;el.classList.toggle('recording',rec)};
-function stopPlayback(){playing=false;loop=false;token++;for(const a of Object.values(els)){a.pause();a.currentTime=0;} $('stop').disabled=true;$('play-once').disabled=!(data.model&&data.me);$('play-loop').disabled=!(data.model&&data.me);$('compare-status').textContent='Pronto per il confronto.';}
+function stopPlayback(){playing=false;loop=false;token++;if(activeSource){try{activeSource.onended=null;activeSource.stop();}catch(e){}activeSource.disconnect();activeSource=null;}for(const a of Object.values(els)){a.pause();a.currentTime=0;} $('stop').disabled=true;$('play-once').disabled=!(data.model&&data.me);$('play-loop').disabled=!(data.model&&data.me);$('compare-status').textContent='Pronto per il confronto.';}
 function render(){for(const k of ['model','me']){if(urls[k])URL.revokeObjectURL(urls[k]);urls[k]=data[k]?URL.createObjectURL(data[k]):null;els[k].style.display=data[k]?'block':'none';$(k+'-empty').style.display=data[k]?'none':'block';$('delete-'+k).disabled=!data[k];if(urls[k])els[k].src=urls[k];else els[k].removeAttribute('src');els[k].load();}stopPlayback();}
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open('pronuncia_db',1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('sessions'))req.result.createObjectStore('sessions',{keyPath:'id'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
 function transaction(mode,fn){return new Promise((resolve,reject)=>{const tx=db.transaction('sessions',mode),store=tx.objectStore('sessions');const req=fn(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
@@ -35,8 +35,52 @@ async function record(kind){if(recording){if(recording.kind===kind){await stopRe
 let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});}catch(e){status(kind,'Microfono non disponibile: controlla i permessi di Safari.');return;}
 try{let chunks=[];const preferred=['audio/mp4','audio/webm;codecs=opus','audio/webm'];const format=preferred.find(x=>MediaRecorder.isTypeSupported(x));const recorder=new MediaRecorder(stream,format?{mimeType:format}:undefined);recording={kind,recorder,stream};recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onerror=()=>status(kind,'Errore durante la registrazione.');recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());const blob=new Blob(chunks,{type:recorder.mimeType||chunks[0]?.type||'audio/mp4'});recording=null;if(blob.size){data[kind]=blob;render();status(kind,'Registrazione pronta.');}else status(kind,'Nessun audio registrato.');};recorder.start();$('record-'+kind).textContent='■ Termina';$('record-'+kind).classList.add('warn');status(kind,'● Registrazione in corso…',true);
 }catch(e){stream.getTracks().forEach(t=>t.stop());status(kind,'Registrazione non supportata su questo dispositivo.');}}
-function once(audio,run){return new Promise(resolve=>{if(!run()){resolve(false);return;}let completed=false;function cleanup(){audio.removeEventListener('ended',ended);audio.removeEventListener('error',failed);audio.removeEventListener('pause',paused);}function ended(){completed=true;cleanup();resolve(true)}function failed(){cleanup();resolve(false)}function paused(){if(!completed){cleanup();resolve(false)}}audio.addEventListener('ended',ended);audio.addEventListener('error',failed);audio.addEventListener('pause',paused);audio.currentTime=0;audio.playbackRate=Number($('speed').value);audio.play().catch(failed);});}
-async function compare(repeat){if(!(data.model&&data.me)||recording)return;stopPlayback();playing=true;loop=repeat;const mine=token;$('stop').disabled=false;$('play-once').disabled=true;$('play-loop').disabled=true;do{for(const k of ['model','me']){if(!playing||mine!==token)break;$('compare-status').textContent=k==='model'?'In ascolto: voce modello…':'In ascolto: la mia voce…';const ok=await once(els[k],()=>playing&&mine===token);if(!ok){if(mine===token)stopPlayback();return;}}}while(loop&&playing&&mine===token);if(mine===token)stopPlayback();}
+// Un solo AudioContext riproduce entrambe le voci: non servono due avvii audio
+// automatici, che su alcune versioni di Safari iOS possono essere bloccati.
+async function compare(repeat){
+  if(!(data.model&&data.me)||recording)return;
+  stopPlayback();playing=true;loop=repeat;
+  const mine=token;
+  $('stop').disabled=false;$('play-once').disabled=true;$('play-loop').disabled=true;
+  try{
+    const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+    if(!AudioContextClass)throw Error('AudioContext non disponibile');
+    if(!ctx)ctx=new AudioContextClass();
+    // Richiamato immediatamente dal tocco, prima di qualsiasi lettura asincrona.
+    await ctx.resume();
+    $('compare-status').textContent='Preparazione dei due audio…';
+    const [modelBuffer,meBuffer]=await Promise.all([data.model,data.me].map(async blob=>{
+      const raw=await blob.arrayBuffer();
+      return await ctx.decodeAudioData(raw);
+    }));
+    if(!playing||mine!==token)return;
+    const buffers=[modelBuffer,meBuffer];
+    let index=0;
+    const next=()=>{
+      if(!playing||mine!==token)return;
+      if(index>=2){
+        if(!loop){stopPlayback();return;}
+        index=0;
+      }
+      const k=index===0?'model':'me';
+      $('compare-status').textContent=k==='model'?'In ascolto: voce modello…':'In ascolto: la mia voce…';
+      const source=ctx.createBufferSource();
+      source.buffer=buffers[index++];
+      source.playbackRate.value=Number($('speed').value);
+      source.connect(ctx.destination);
+      activeSource=source;
+      source.onended=()=>{
+        source.disconnect();
+        if(activeSource===source)activeSource=null;
+        next();
+      };
+      source.start();
+    };
+    next();
+  }catch(e){
+    if(mine===token){stopPlayback();$('compare-status').textContent='Non riesco a riprodurre la sequenza: '+(e.message||'formato audio non supportato')+'. Prova i singoli lettori.';}
+  }
+}
 $('record-model').onclick=()=>record('model');$('record-me').onclick=()=>record('me');for(const k of ['model','me']){$('delete-'+k).onclick=()=>{if(recording){alert('Termina prima la registrazione.');return;}data[k]=null;render();status(k,'Audio eliminato dall’esercizio corrente.');};}
 $('import-model').onchange=e=>{const file=e.target.files?.[0];if(!file)return;if(!(file.type.startsWith('audio/')||/\.(m4a|mp3|wav|aac|ogg|webm)$/i.test(file.name))){alert('Seleziona un file audio.');return;}if(recording){alert('Termina prima la registrazione.');return;}data.model=file;render();status('model','Importato: '+file.name);e.target.value='';};
 $('speed').oninput=()=>{$('speed-value').textContent=Number($('speed').value).toFixed(2).replace('.',',')+'×';for(const a of Object.values(els))a.playbackRate=Number($('speed').value);};$('play-once').onclick=()=>compare(false);$('play-loop').onclick=()=>compare(true);$('stop').onclick=stopPlayback;
