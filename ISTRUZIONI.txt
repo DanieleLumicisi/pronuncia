@@ -1,0 +1,16 @@
+PRONUNCIA — Versione 1
+
+Pubblicazione gratuita su GitHub Pages:
+1. Crea un account gratuito su github.com (se non lo hai).
+2. Crea un nuovo repository pubblico chiamato "pronuncia".
+3. Carica il CONTENUTO di questa cartella (index.html, sw.js, manifest.webmanifest, icon.svg, icon-180.png, icon-512.png) nella cartella principale del repository.
+4. In Settings > Pages, seleziona Deploy from a branch, branch main, directory /(root), poi Save.
+5. Visita https://TUO-NOME.github.io/pronuncia/ su Safari dell’iPhone. Potrebbero volerci alcuni minuti prima che la pagina sia disponibile.
+6. Tocca Condividi > Aggiungi alla schermata Home > Aggiungi.
+7. Apri Pronuncia dalla schermata Home e consenti l’accesso al microfono.
+
+Le registrazioni restano nell’archivio locale dell’app sul telefono, non vengono caricate su GitHub. GitHub Pages serve solo i file del programma. Il codice e il sito sono pubblicamente accessibili.
+
+NOTA: iOS può rimuovere dati di siti web in certe circostanze; esporta e conserva le registrazioni importanti nell’app File. La riproduzione in sequenza richiede che entrambi gli audio siano presenti. L’export di due file può attivare due download distinti; se Safari ne blocca uno, esporta e salva singolarmente usando l’interfaccia.
+
+La registrazione richiede Safari su HTTPS (GitHub Pages lo fornisce). Al primo utilizzo con connessione, la app memorizza i suoi file per il successivo utilizzo offline. Se aggiorni il codice, la cache offline potrebbe richiedere una nuova versione del service worker.
